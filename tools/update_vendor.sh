@@ -51,10 +51,3 @@ find vendor -type f \( \
 (cd providers && go mod tidy)
 (cd test/e2e && go mod tidy)
 go mod tidy
-
-# create a symlink in vendor directory pointing cloud-provider-gcp/providers to the //providers.
-# This lets other packages and tools use the local staging components as if they were vendored.
-
-# restore BUILD files in vendor/
-# Note: Workaround for vendor/github.com/onsi/ginkgo/v2/ginkgo to use `BUILD.bazel` because it contains a directory named `build`.
-bazel run //:gazelle

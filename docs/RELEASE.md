@@ -65,10 +65,8 @@ Update the `/cluster` directory if needed. A script under `/cluster` is used to 
 
 ### Testing
 1. Run `tools/verify-all.sh`.
-1. Build `cloud-provider-gcp` with command `bazel clean && bazel build //release:release-tars`.
-1. Bring the cluster up with `kubetest2 gce -v 2 --repo-root $REPO\_ROOT --build --up`
-1. Run conformance tests locally with `kubetest2 gce -v 2 --repo-root $REPO\_ROOT --build --up --down --test=ginkgo -- --test-package-version=[your version] --focus-regex='\[Conformance\]'`
-
+1. Build `cloud-provider-gcp`.
+1. Bring up a cluster and run conformance tests using `tools/kops_lkg_ccm.sh`.
 **_Note_**: if kubetest2 not working as expected, try with:
 
 ```bash
