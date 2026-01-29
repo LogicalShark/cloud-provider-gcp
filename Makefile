@@ -106,6 +106,20 @@ test-sh: ## Run shell script syntax checks.
 	bash -n cluster/common.sh
 	bash -n cluster/clientbin.sh
 	bash -n cluster/kube-util.sh
+	
+## --------------------------------------
+##@ Images
+## --------------------------------------
+REGISTRY ?= gcr.io/k8s-staging-cloud-provider-gcp
+CCM_IMAGE_NAME ?= cloud-controller-manager
+
+.PHONY: build-images
+build-images: build-all ## Build all images.
+	docker build -f Dockerfile -t $(REGISTRY)/$(CCM_IMAGE_NAME):$(GIT_VERSION) .
+
+.PHONY: push-images
+push-images: build-images ## Push all images.
+	docker push $(REGISTRY)/$(CCM_IMAGE_NAME):$(GIT_VERSION)
 
 ## --------------------------------------
 ##@ Tools
