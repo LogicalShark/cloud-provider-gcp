@@ -1,0 +1,249 @@
+# Manual Kubernetes Cluster on GCE (using kubeadm)
+
+This guide provides an example of how to create GCE instances and initialize a Kubernetes cluster manually using `kubeadm`, configured to use an external Cloud Controller Manager.
+
+## Step 1: Create GCE Instances
+```sh
+ZONE=us-central1-a
+MACHINE_TYPE=e2-medium  # Minimum recommended for K8s control plane
+
+# Control plane instance
+gcloud compute instances create controller-0 \
+    --zone=$ZONE \
+    --machine-type=$MACHINE_TYPE \
+    --can-ip-forward \ # Required for Kubernetes pod networking
+    --scopes=cloud-platform \
+    --tags=controller-0
+
+# Worker instance (optional)
+gcloud compute instances create worker-0 \
+    --zone=$ZONE \
+    --machine-type=$MACHINE_TYPE \
+    --can-ip-forward \ # Required for Kubernetes pod networking
+    --scopes=cloud-platform \
+    --tags=worker-0
+```
+
+## Step 2: Access and Configure Nodes (Master and Worker)
+
+SSH into master:
+```sh
+gcloud compute ssh controller-0 --zone=us-central1-a
+```
+
+### 2.1 Install Container Runtime
+```sh
+sudo apt-get update
+sudo apt-get install -y containerd
+
+sudo mkdir -p /etc/containerd
+containerd config default | sudo tee /etc/containerd/config.toml
+
+# Use systemd for cgroup management (recommended for K8s)
+sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+sudo systemctl restart containerd
+```
+
+### 2.2 Install Kubeadm, Kubelet, and Kubectl
+
+Set the Kubernetes version you want to install (https://kubernetes.io/releases/):
+```sh
+K8S_VERSION=v1.35.0
+K8S_MINOR_VERSION=v1.35
+```
+
+Install kubeadm, kubelet, and kubectl:
+```sh
+sudo apt-get update
+sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+
+sudo mkdir -p -m 755 /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/${K8S_MINOR_VERSION}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_MINOR_VERSION}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+# Prevent automatic updates of these packages to ensure version stability
+sudo apt-mark hold kubelet kubeadm kubectl
+```
+
+### 2.3 Configure Kubelet for External Cloud Provider
+```sh
+# Add --cloud-provider=external to the KUBELET_EXTRA_ARGS
+# This informs the kubelet that it will rely on an external Cloud Controller Manager
+echo 'KUBELET_EXTRA_ARGS="--cloud-provider=external"' | sudo tee /etc/default/kubelet
+
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+```
+
+### 2.4 Enable Kernel Modules and IP Forwarding
+```sh
+# Load required kernel modules for networking and overlays
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+# Configure sysctl settings for Kubernetes networking
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+sudo sysctl --system
+```
+
+### 2.5 Set up worker node
+
+To set up the optional worker node, SSH into the worker node (`worker-0`) and repeat steps 2.1 through 2.4.
+
+## Step 3: Initialize Cluster
+
+Check kubelet installation:
+```sh
+kubelet --version
+```
+
+Create the kubeadm config:
+```sh
+# Get the public IP of this instance to include in the certificate SANs
+PUBLIC_IP=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+
+cat <<EOF > kubeadm-config.yaml
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: ${K8S_VERSION} # Match the version you installed
+apiServer:
+  extraArgs:
+    cloud-provider: external
+  certSANs:
+    - "127.0.0.1"
+    - "localhost"
+    - "${PUBLIC_IP}"
+controllerManager:
+  extraArgs:
+    cloud-provider: external
+EOF
+
+sudo kubeadm init --config=kubeadm-config.yaml
+```
+
+## Step 3.1: Add Worker Node
+
+To add a worker node, copy the command generated at the end of `kubeadm init` and paste it in the worker terminal to join! If you lost the command or the token expired, you can generate a new join command by running this on the control plane node (`controller-0`):
+```sh
+gcloud compute ssh controller-0 --zone=us-central1-a
+```
+
+```sh
+sudo kubeadm token create --print-join-command
+```
+
+Exit the master node:
+```sh
+exit # or ctrl+D
+```
+
+To add the worker node, you must execute the exact pre-requisite steps described above in **Steps 2.1 through 2.4** directly on the worker instances (`gcloud compute ssh worker-0`). 
+
+The commands in those sections (installing containerd, node tools, and customizing cloud provider arguments) are identical for both Master and Worker nodes. Once you are done running those steps sequentially on `worker-0`, paste the `kubeadm join` command generated by the master above to join:
+
+```sh
+gcloud compute ssh worker-0 --zone=us-central1-a
+```
+
+```sh
+# Must run as root
+sudo [Paste the generated kubeadm join command string]
+exit
+```
+
+## Step 4: Configure Kubectl for Admin Access
+
+Re-enter the master node:
+```sh
+gcloud compute ssh controller-0 --zone=us-central1-a
+```
+
+Set up kubectl:
+```sh
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+```
+
+## Step 5: Verify
+```sh
+kubectl get nodes
+kubectl describe node controller-0 | grep Taints
+# Output should show: node.cloudprovider.kubernetes.io/uninitialized:NoSchedule
+exit
+```
+
+## Step 6: Configure Kubectl for External Access
+
+If following the CCM manual setup guide, you should configure kubectl for external access.
+
+Exit the master node:
+```sh
+exit
+```
+
+Prepare the kubeconfig on your local machine using an **SSH Tunnel** (recommended to bypass firewall restrictions):
+
+Extract Kubeconfig:
+```sh
+gcloud compute scp controller-0:~/.kube/config /tmp/manual-kubeconfig --zone=us-central1-a
+```
+
+Patch config for external use:
+```sh
+# Update config to target the tunnel (Run this back in your working terminal)
+sed -i "s|server: https://.*|server: https://localhost:6443|g" /tmp/manual-kubeconfig
+```
+
+Start SSH Tunnel (Run this in a **separate background terminal**):
+```sh
+# Forward local port 6443 to Master port 6443
+gcloud compute ssh controller-0 --zone=us-central1-a -- -L 6443:localhost:6443 -N
+```
+
+Update config to target the tunnel (Run this back in your working terminal):
+```sh
+sed -i "s|server: https://.*|server: https://localhost:6443|g" /tmp/manual-kubeconfig
+
+export KUBECONFIG=/tmp/manual-kubeconfig
+# Verify kubectl
+kubectl get nodes
+```
+
+If following the [CCM manual setup](ccm-manual.md), you may now proceed with that guide.
+
+## Teardown
+
+To tear down the manual Kubernetes cluster and release all GCE resources:
+
+Delete GCE Instances:
+```sh
+gcloud compute instances delete controller-0 worker-0 --zone=us-central1-a # --quiet
+```
+
+Clean up Local Kubeconfig:
+```sh
+rm /tmp/manual-kubeconfig
+```
+
+Stop SSH Tunnel:
+Terminate the background `gcloud compute ssh` tunnel command running in your secondary terminal window (e.g. via `Ctrl + C`).
+
+Unset local KUBECONFIG:
+Restore default `kubectl` context behavior:
+```sh
+unset KUBECONFIG
+```

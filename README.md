@@ -11,9 +11,9 @@
 This repository implements the [cloud provider](https://github.com/kubernetes/cloud-provider) interface for [Google Cloud Platform (GCP)](https://cloud.google.com/).
 It provides components for Kubernetes clusters running on GCP and is maintained primarily by the Kubernetes team at Google.
 
-To get started with the GCP CCM, see the **[kOps Quickstart](docs/kops-quickstart.md)**.
+To get started with the GCP CCM, see the **[Manual CCM Setup Guide](docs/ccm-manual.md)** or the **[kOps Quickstart](docs/kops-quickstart.md)**.
 
-For local development, use `make help` to see all available commands.
+Use `make help` to see all available commands.
 
 ## Components
 
